@@ -31,6 +31,7 @@
 
 void sendToServer(int socketNum);
 void processStdin(int);
+void sendHandle(int , char * );
 void processMsgFromServer(int);
 void clientControl(int);
 void receiveFromServer(int );
@@ -45,22 +46,39 @@ int main(int argc, char * argv[])
 	checkArgs(argc, argv);
 
 	/* set up the TCP Client socket  */
-	socketNum = tcpClientSetup(argv[1], argv[2], DEBUG_FLAG);
-	
+	socketNum = tcpClientSetup(argv[2], argv[3], DEBUG_FLAG);
+	// send handle to server
+	sendHandle(socketNum, argv[1]);
+	// client polling manager
 	clientControl(socketNum);
-
-	close(socketNum);
 	
 	return 0;
+}
+
+void sendHandle(int socketNum, char * handle) {
+	uint8_t sendBuf[MAXBUF];   //data buffer
+	int sendLen = 0;           //amount of data to send
+	int sent = 0;              //actual amount of data sent/* get the data and send it   */
+	sendLen = strlen(handle) + 1;
+	sendBuf[0] = 1; // flag = 1
+	memcpy(sendBuf+ 1, handle, sendLen);
+	
+	printf("handle: %s string len: %d (including null)\n", handle, sendLen);
+	
+	sent = sendPDU(socketNum, sendBuf, sendLen + 1);
+	if (sent < 0)
+	{
+		perror("send call");
+		exit(-1);
+	}
+
+	printf("Amount of data sent is: %d\n", sent);
+	
 }
 
 void clientControl(int clientSocket) {
 	setupPollSet();
 	addToPollSet(clientSocket);
-	addToPollSet(STDIN_FILENO);
-
-	printf("Enter data: ");
-	fflush(stdout);
 
 	while(1){
 		int curr_socket = pollCall(-1);
@@ -92,15 +110,32 @@ void processMsgFromServer(int serverSocket){
 	if (messageLen > 0)
 	{
 		printf("Message received, length: %d Data: %s\n", messageLen, dataBuffer);
-		printf("Enter data: ");
-		fflush(stdout);
+		
+		uint8_t flag = dataBuffer[0];
+		char *msg = (char *)&dataBuffer[1];
+
+		switch(flag){
+			case 2:
+				printf("$: ");
+				fflush(stdout);
+				addToPollSet(STDIN_FILENO);
+				break;
+			case 3:
+				printf("Handle already in use: %s\n", msg);
+				exit(-1);
+				break;
+			case 7:
+				printf("Client with handle %s does not exist\n", msg);
+				break;
+
+		}
 
 	}
 
 	else
 	{
 		close(serverSocket);
-		printf("\nConnection closed by other side\n");
+        printf("Server has terminated\n");
 		removeFromPollSet(serverSocket);
 		exit(-1);
 	}
@@ -110,12 +145,34 @@ void sendToServer(int socketNum)
 {
 	uint8_t sendBuf[MAXBUF];   //data buffer
 	int sendLen = 0;           //amount of data to send
-	int sent = 0;              //actual amount of data sent/* get the data and send it   */
+	int sent = 0;              //actual amount of data sent/* get the data and send it   
+	char command[3]; 		   //2 bytes + 1 for null terminator
+	int flag = 0;			   //numeric value of command
+
 	
-	sendLen = readFromStdin(sendBuf);
-	printf("read: %s string len: %d (including null)\n", sendBuf, sendLen);
-	
-	sent = sendPDU(socketNum, sendBuf, sendLen);
+	sendLen = readFromStdin(sendBuf); 
+	command[0] = sendBuf[0];
+	command[1] = sendBuf[1];
+	command[2] = '\0'; // Null terminate
+	//printf("read: %s string len: %d (including null)\n", sendBuf, sendLen);
+	printf("Command is %s\n", command);
+
+	if (strcmp(command, "%M") == 0 || strcmp(command, "%m") == 0) {
+        flag = 5;
+    } else if (strcmp(command, "%B") == 0 || strcmp(command, "%b") == 0) {
+        flag = 4;
+    } else if (strcmp(command, "%C") == 0 || strcmp(command, "%c") == 0) {
+        flag = 6;
+    } else if (strcmp(command, "%L") == 0 || strcmp(command, "%l") == 0) {
+        flag = 10;
+    } else {
+        printf("Invalid command.\n");
+    }
+
+	memcpy(sendBuf+ 1, sendBuf + 3, sendLen);
+	sendBuf[0] = flag; 
+
+	sent = sendPDU(socketNum, sendBuf, sendLen+1);
 	if (sent < 0)
 	{
 		perror("send call");
@@ -125,25 +182,6 @@ void sendToServer(int socketNum)
 	printf("Amount of data sent is: %d\n", sent);
 }
 
-void receiveFromServer(int socketNum) {
-    uint8_t recvBuf[MAXBUF];
-    int recvLen = 0;
-
-    // Receive data from the server
-    recvLen = recvPDU(socketNum, recvBuf, MAXBUF);
-    if (recvLen == 0) {
-        // Server closed the connection
-        printf("Server has terminated\n");
-        exit(0);
-    } else if (recvLen < 0) {
-        perror("Receive failed");
-        exit(-1);
-    }
-
-    recvBuf[recvLen] = '\0'; // Null-terminate the received data
-    printf("Received from server: %s\n", recvBuf);
-}
-
 int readFromStdin(uint8_t * buffer)
 {
 	char aChar = 0;
@@ -151,7 +189,7 @@ int readFromStdin(uint8_t * buffer)
 	
 	// Important you don't input more characters than you have space 
 	buffer[0] = '\0';
-	printf("Enter data: ");
+	printf("$: ");
 	while (inputLen < (MAXBUF - 1) && aChar != '\n')
 	{
 		aChar = getchar();
@@ -172,9 +210,14 @@ int readFromStdin(uint8_t * buffer)
 void checkArgs(int argc, char * argv[])
 {
 	/* check command line arguments  */
-	if (argc != 3)
+	if (argc != 4)
 	{
-		printf("usage: %s host-name port-number \n", argv[0]);
+		printf("usage: %s handle host-name port-number \n", argv[0]);
+		exit(1);
+	}
+
+	if ((strlen(argv[1])) >= 101) {
+		printf("Invalid handle, handle longer than 100 characters: %s\n", argv[0]);
 		exit(1);
 	}
 }

@@ -1,6 +1,12 @@
 #include "send.h"
 #include "networks.h"
 
+int flag_parse(uint8_t * dataBuffer) {
+    uint8_t flag = 0;
+    memcpy(&flag, dataBuffer, 1);
+    return flag;
+}
+
 int sendPDU(int clientSocket, uint8_t * dataBuffer, int lengthOfData) {
     uint8_t PDUbuf[lengthOfData + 2];
     uint16_t PDUlength_HOST = lengthOfData + 2;
