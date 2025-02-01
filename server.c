@@ -128,7 +128,7 @@ void recvFromClient(int clientSocket, Dict * handle_table)
 				} else {
 					int destSocket = (intptr_t)lookupResult; // Safe cast
 					printf("Sending to socket number: %d, with message: %s\n", destSocket, message);
-					sendToClient(destSocket, message, 0);
+					sendToClient(destSocket, message, 8);
 				}
 				break;
 
@@ -156,12 +156,14 @@ void sendToClient(int socketNum, char * buffer, int flag)
 	sendLen = strlen(buffer);
 	sendBuf[0] = flag;
 	memcpy(sendBuf + 1, buffer, sendLen);
-	sendBuf[sendLen + 1] = '\0'; // Ensure null-termination
-
-
-	printf("sending: %s (string len: %d (including null))\n", sendBuf, sendLen);
+	sendBuf[sendLen + 1] = '\0';
 	
-	sent = sendPDU(socketNum, sendBuf, sendLen + 1);
+	printf("sendBuf contents (raw bytes): ");
+    for (int i = 0; i < sendLen + 2; i++) {
+        printf("%02X ", sendBuf[i]);  // Print in hex format
+    }
+
+	sent = sendPDU(socketNum, sendBuf, sendLen + 2);
 	if (sent < 0)
 	{
 		perror("send call");

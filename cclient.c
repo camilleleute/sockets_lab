@@ -59,13 +59,15 @@ void sendHandle(int socketNum, char * handle) {
 	uint8_t sendBuf[MAXBUF];   //data buffer
 	int sendLen = 0;           //amount of data to send
 	int sent = 0;              //actual amount of data sent/* get the data and send it   */
-	sendLen = strlen(handle) + 1;
+	sendLen = strlen(handle);
 	sendBuf[0] = 1; // flag = 1
 	memcpy(sendBuf+ 1, handle, sendLen);
+	sendBuf[sendLen + 1] = '\0';
+
 	
 	printf("handle: %s string len: %d (including null)\n", handle, sendLen);
 	
-	sent = sendPDU(socketNum, sendBuf, sendLen + 1);
+	sent = sendPDU(socketNum, sendBuf, sendLen + 2);
 	if (sent < 0)
 	{
 		perror("send call");
@@ -109,10 +111,9 @@ void processMsgFromServer(int serverSocket){
 
 	if (messageLen > 0)
 	{
-		printf("Message received, length: %d Data: %s\n", messageLen, dataBuffer);
-		
 		uint8_t flag = dataBuffer[0];
 		char *msg = (char *)&dataBuffer[1];
+		printf("Message received, length: %d Data: %s\n", messageLen, msg);
 
 		switch(flag){
 			case 2:
