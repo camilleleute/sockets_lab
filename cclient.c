@@ -30,15 +30,14 @@
 #define DEBUG_FLAG 1
 
 void sendToServer(int, char *);
-void processStdin(int, char *);
+void parseAndPrint(char * , int);
 void sendHandle(int , char * );
 void processMsgFromServer(int);
 void clientControl(int, char *);
 void receiveFromServer(int );
 int readFromStdin(uint8_t *);
 void checkArgs(int argc, char * argv[]);
-char* handle_parser(int , char [][100], uint8_t []) ;
-
+char* handle_parser(int , uint8_t [], uint8_t [], int *);
 
 int main(int argc, char * argv[])
 {
@@ -82,7 +81,7 @@ void clientControl(int clientSocket, char * myHandle) {
 			processMsgFromServer(curr_socket);
 
 		} else {
-			processStdin(clientSocket, myHandle);
+			sendToServer(clientSocket, myHandle);
 		}
 		printf("$: ");
 		fflush(stdout);
@@ -90,9 +89,6 @@ void clientControl(int clientSocket, char * myHandle) {
 
 }
 
-void processStdin(int socket, char * myHandle){
-	sendToServer(socket, myHandle);
-}
 
 void processMsgFromServer(int serverSocket){
 	uint8_t dataBuffer[MAXBUF];
@@ -109,7 +105,6 @@ void processMsgFromServer(int serverSocket){
 	{
 		uint8_t flag = dataBuffer[0];
 		char *msg = (char *)&dataBuffer[1];
-		
 
 		switch(flag){
 			case 2:
@@ -119,11 +114,26 @@ void processMsgFromServer(int serverSocket){
 				printf("Handle already in use: %s\n", msg);
 				exit(-1);
 				break;
+			case 4: // %B
+				parseAndPrint(msg, flag);
+				break;
+			case 5: // %M
+				parseAndPrint(msg, flag);
+				break;
+			case 6: // %C
+				parseAndPrint(msg, flag);
+				break;
 			case 7:
 				printf("\nClient with handle %s does not exist\n", msg);
 				break;
+			case 11:
+				uint32_t num_handles = 0;
+				memcpy(&num_handles, msg, 4);
+				uint32_t num_handles_HOST = ntohl(num_handles);
+				printf("\nNumber of clients: %d", num_handles_HOST);
+				break;
 			default:
-				printf("\n%s\n", msg);
+				//printf("\n%s\n", msg);
 				break;
 		}
 		
@@ -137,9 +147,36 @@ void processMsgFromServer(int serverSocket){
 	}
 }
 
+void parseAndPrint(char * msg, int flag) {
+	// 				  msg |>      
+	// |-PDU LEN-||-flag-||-src handle len-||-src handle-||-# dest handles-||-dest handle len-||-dest handle-||-text-|
+	//   2 bytes     1            1               XX               1                1                  XX        XX
+	uint8_t src_handle_len = msg[0];
+	char src_handle[src_handle_len+1];
+	memcpy(src_handle, msg+1, src_handle_len);
+	src_handle[src_handle_len] = '\0';
+	int idx = src_handle_len + 1;
+
+	if (flag == 6 || flag == 5) {
+		uint8_t num_dest_handles = msg[src_handle_len+1];
+		idx++;
+		for (int i = 0; i < num_dest_handles; i++){
+			uint8_t dest_handle_len = msg[idx++];
+			idx += dest_handle_len;
+		}
+	} 
+
+	msg += idx;
+	
+	char formatted_message[src_handle_len + 2 + strlen(msg) + 1];
+	snprintf(formatted_message, sizeof(formatted_message), "%s: %s", src_handle, msg);
+	printf("\n%s\n", formatted_message);
+
+}
+
 void sendToServer(int socketNum, char * myHandle)
 {
-	uint8_t sendBuf[MAXBUF];   //data buffer
+	uint8_t sendBuf[MAXBUF];   
 	uint8_t inputMsg[MAXBUF];
 	char * msg = "";
 	int sendLen = 0;           //amount of data to send
@@ -147,14 +184,14 @@ void sendToServer(int socketNum, char * myHandle)
 	char command[3]; 		   //2 bytes + 1 for null terminator
 	int flag = 0;			   //numeric value of command
 	int src_handle_len = strlen(myHandle);
-	int num_dest_handles = 0;
-	char dest_handles[8][100];
+	uint8_t num_dest_handles = 0;
 	int idx = 0; 				// index into sendBuf
+	int start = 0;				// where to start parsing for destination handles
 
 	// |-PDU LEN-||-flag-||-src handle len-||-src handle-||-# dest handles-||-dest handle len-||-dest handle-||-text-|
 	//   2 bytes     1            1               XX               1                1                  XX        XX
-	memset(sendBuf, 0, sizeof(sendBuf));	// clear buffer
-	memset(inputMsg, 0, sizeof(inputMsg));	// clear buffer
+	memset(sendBuf, 0, sizeof(sendBuf));	
+	memset(inputMsg, 0, sizeof(inputMsg));	
 
 	readFromStdin(inputMsg); 
 	command[0] = inputMsg[0];
@@ -166,34 +203,47 @@ void sendToServer(int socketNum, char * myHandle)
 	if (strcmp(command, "%M") == 0 || strcmp(command, "%m") == 0) {
         flag = 5;
 		num_dest_handles = 1;
-		msg = handle_parser(num_dest_handles, dest_handles, &inputMsg[3]);
-		if (msg == NULL) {
-            //printf("\nError parsing handles or message.\n");
-            return;
-        }
+		start = 3;	
     } else if (strcmp(command, "%B") == 0 || strcmp(command, "%b") == 0) {
         flag = 4;
     } else if (strcmp(command, "%C") == 0 || strcmp(command, "%c") == 0) {
         flag = 6;
+		start = 5;
+		
+		char *token = strtok((char *)&inputMsg[3], " ");
+    
+		if (token == NULL) {
+			printf("Invalid command format\n");
+			return;
+		}
+		 num_dest_handles = atoi(token);
+
+		if ((num_dest_handles < 2) || (num_dest_handles > 9)) {
+        	printf("Invalid input: number of recipients is out of range\n");
+        	return;
+    	}
+		if (msg == NULL) return;
+
     } else if (strcmp(command, "%L") == 0 || strcmp(command, "%l") == 0) {
         flag = 10;
+		sendBuf[0] = flag;
+		return;
     } else {
         printf("Invalid command.\n");
 		fflush(stdout);
 		return;
     }
-
+ 
 	sendBuf[idx++] = flag; 
 	sendBuf[idx++] = src_handle_len;
 	memcpy(&sendBuf[idx], myHandle, src_handle_len);	
 	idx += src_handle_len;
-	sendBuf[idx++] = num_dest_handles;
-
-	for (int i = 0; i < num_dest_handles; i++){
-		int dest_handle_len = strlen(dest_handles[i]);
-		sendBuf[idx++] = dest_handle_len;
-		memcpy(&sendBuf[idx], dest_handles[i], dest_handle_len);
-		idx += dest_handle_len;
+	
+	if (flag == 6 || flag == 5) {
+		sendBuf[idx++] = num_dest_handles;
+		msg = handle_parser(num_dest_handles, &inputMsg[start], sendBuf, &idx);
+	} else {
+		msg = (char *)&inputMsg[3];
 	}
 
 	int msgLen = strlen(msg);
@@ -214,43 +264,30 @@ void sendToServer(int socketNum, char * myHandle)
 		perror("send call");
 		exit(-1);
 	}
-
-	//printf("Amount of data sent is: %d\n", sent);
 }
 
-char* handle_parser(int num_handles, char handles[][100], uint8_t msg[]) {
-    if (msg == NULL || num_handles < 1 || num_handles > 8) {
-        printf("\nInvalid input: msg is NULL or num_handles is out of range\n");
-        return NULL;
-    }
-
-    // Create a writable copy of the message
+char* handle_parser(int num_handles, uint8_t msg[], uint8_t sendBuf[], int * idx) {
     char msg_copy[MAXBUF];
-    strncpy(msg_copy, (char *)msg, sizeof(msg_copy) - 1);
-    msg_copy[sizeof(msg_copy) - 1] = '\0'; // Null-terminate to prevent overflow
-
+    strncpy(msg_copy, (char *)msg, MAXBUF - 1);
+    msg_copy[MAXBUF - 1] = '\0';  // Ensure null termination
     char *token = strtok(msg_copy, " ");
-
     // Extract handles
     for (int i = 0; i < num_handles; i++) {
         if (token == NULL) {
             printf("\nNot enough handles provided\n");
             return NULL;
         }
-        strncpy(handles[i], token, 100 - 1);
-        handles[i][100 - 1] = '\0'; // Ensure null-termination
+        uint8_t handle_len = strlen(token);
+        sendBuf[(*idx)++] = handle_len;  
+        memcpy(&sendBuf[*idx], token, handle_len);
+        *idx += handle_len;
         token = strtok(NULL, " ");
     }
 
-    // Calculate the length of the handles portion in the original message
-    size_t handles_length = 0;
-    for (int i = 0; i < num_handles; i++) {
-        handles_length += strlen(handles[i]) + 1; // +1 for the space or null terminator
-    }
-
-    // Return a pointer to the message portion in the original buffer
-    return (char *)(msg + handles_length);
+    int offset = token - msg_copy;
+    return (char *)(msg + offset);
 }
+
 
 int readFromStdin(uint8_t * buffer)
 {
@@ -287,7 +324,7 @@ void checkArgs(int argc, char * argv[])
 	}
 
 	if ((strlen(argv[1])) >= 101) {
-		printf("Invalid handle, handle longer than 100 characters: %s\n", argv[0]);
+		printf("Invalid handle, handle longer than 100 characters: %s\n", argv[1]);
 		exit(1);
 	}
 }

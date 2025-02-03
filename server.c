@@ -36,6 +36,8 @@ void addNewSocket(int);
 void processClient(int, Dict *);
 void serverControl(int);
 void sendToClient(int , char * , int );
+void get_dest_handles(uint8_t [], Dict *, int, int);
+void broadcastHandling(uint8_t [], Dict * , int , int );
 
 int main(int argc, char *argv[])
 {
@@ -88,8 +90,7 @@ void recvFromClient(int clientSocket, Dict * handle_table)
 	int messageLen = 0;
 	
 	//now get the data from the client_socket
-	if ((messageLen = recvPDU(clientSocket, dataBuffer, MAXBUF)) < 0)
-	{
+	if ((messageLen = recvPDU(clientSocket, dataBuffer, MAXBUF)) < 0) {
 		perror("recv call");
 		exit(-1);
 	}
@@ -97,80 +98,74 @@ void recvFromClient(int clientSocket, Dict * handle_table)
 	if (messageLen > 0)
 	{
 		uint8_t flag = dataBuffer[0]; 
-		char *msg = (char *)&dataBuffer[1];
-		printf("Message received, flag: %d length: %d Data: %s\n", flag, messageLen, msg);
-
+		
 		switch(flag) {
 			case 1: // incoming handle from client
-				if ((dctget(handle_table, msg)) == NULL) {
-					printf("inserting %s with socket %d\n", msg, clientSocket);
-					dctinsert(handle_table, msg, (void *)(long)clientSocket);
-					sendToClient(clientSocket, msg, 2);
+				char *handle = (char *)&dataBuffer[1];
+				if ((dctget(handle_table, handle)) == NULL) {
+					printf("inserting %s with socket %d\n", handle, clientSocket);
+					dctinsert(handle_table, handle, (void *)(long)clientSocket);
+					sendToClient(clientSocket, handle, 2);
 				}
 				else {
-					sendToClient(clientSocket, msg, 3);
+					sendToClient(clientSocket, handle, 3);
 				}
 				break;
-			//case 4: // broadcast %B
+			case 4: // broadcast %B
+				broadcastHandling(dataBuffer, handle_table, clientSocket, messageLen);
+				break;
 			case 5: // message %M
-			//          msg start |>
-			// |-PDU LEN-||-flag-||-src handle len-||-src handle-||-# dest handles-||-dest handle len-||-dest handle-||-text-|
-			//   2 bytes     1            1               XX               1                1                  XX        XX
-				
-				uint8_t src_handle_len = msg[0];
-				char src_handle[src_handle_len+1];
-				memcpy(src_handle, msg+1, src_handle_len);
-				src_handle[src_handle_len] = '\0';
+				get_dest_handles(dataBuffer, handle_table, clientSocket, messageLen);			
+				break;
+			case 6: // multicast %C
+				get_dest_handles(dataBuffer, handle_table, clientSocket, messageLen);
+				break;
+			case 10: // list %L
 
-				uint8_t dest_handle_len = msg[src_handle_len+2];
-				char dest_handle[dest_handle_len+1];
-				memcpy(dest_handle, msg + 1 + src_handle_len + 2, dest_handle_len);
-				dest_handle[dest_handle_len] = '\0';
-
-				char *message = msg + 1 + src_handle_len + 1 + 1 + dest_handle_len;
-				char formatted_message[src_handle_len + 2 + strlen(message) + 1];
-				snprintf(formatted_message, sizeof(formatted_message), "%s: %s", src_handle, message);
-
-				printf("Dest Handle: %s\n", dest_handle);
-				printf("Message: %s\n", message);
-
-				void* lookupResult = dctget(handle_table, dest_handle); 
-
-				if (lookupResult == NULL) { 
-					sendToClient(clientSocket, dest_handle, 7); 
-				} else {
-					int destSocket = (intptr_t)lookupResult; // Safe cast
-					printf("Sending to socket number: %d, with message: %s\n", destSocket, formatted_message);
-					sendToClient(destSocket, formatted_message, 8);
+				uint8_t sendBuf[5];
+				uint32_t num_handles = htonl(handle_table->size);
+				sendBuf[0] = 11;
+				memcpy(&sendBuf[1], &num_handles, 4);
+				int sent = sendPDU(clientSocket, dataBuffer, 5);
+				if (sent < 0)
+				{
+					perror("send call");
+					exit(-1);
 				}
 				break;
 
-			// case 6: // multicast %C
-			// 	char *token;
-			// 	int num_handles;
-			// 	char handles[9][101];
-			// 	char text[200] = "";
+				char ** handles = dctkeys(handle_table);
+				for (int i = 0; i < handle_table->size; i++) {
+					uint8_t handlePackets[MAXBUF];
+					uint8_t handle_len = strlen(handles[i]);
+					handlePackets[0] = 12;
+					handlePackets[1] = handle_len;
+					memcpy(&handlePackets[2], handles[i], handle_len);
+					int sent = sendPDU(clientSocket, handlePackets, 5);
+					if (sent < 0)
+					{
+						perror("send call");
+						exit(-1);
+					}
+					memset(handlePackets, 0, sizeof(handlePackets));	
 
-			// 	token = strtok(msg, " ");
-			// 	if (token == NULL) {
-			// 		printf(stderr, "Invalid input format\n");
-			// 		return 1;
-			// 	}
+				}
 
-			// 	// Extract num_handles
-			// 	num_handles = atoi(token);
-			// 	if (num_handles < 2 || num_handles > 9) {
-			// 		fprintf(stderr, "Invalid number of handles\n");
-			// 		return 1;
-			// 	}
+				uint8_t doneBuf[1];
+				doneBuf[0] = 13;
+				int donesent = sendPDU(clientSocket, doneBuf, 1);
+				if (donesent < 0)
+				{
+					perror("send call");
+					exit(-1);
+				}
 
-			//case 10: // list %L
+				break;
 
+			default:
+				break;
 		}
-	}
-
-	else
-	{
+	} else {
 		close(clientSocket);
 		printf("Connection closed by other side\n");
 		// remove from handle table
@@ -178,6 +173,63 @@ void recvFromClient(int clientSocket, Dict * handle_table)
 	}
 }
 
+void broadcastHandling(uint8_t dataBuffer[], Dict * handle_table, int clientSocket, int messageLen) {
+	char ** sockets = dctkeys(handle_table);
+	if (sockets == NULL) {
+		return;
+	} else {
+		for (int i = 0; i < handle_table->size; i++) {
+
+			void* lookupResult = dctget(handle_table, sockets[i]); 
+			if (lookupResult == NULL) { 
+				printf("ERRORERROR\n");
+			} else {
+				int destSocket = (intptr_t)lookupResult;
+				if (destSocket == clientSocket) continue;
+				int sent = sendPDU(destSocket, dataBuffer, messageLen);
+				if (sent < 0)
+				{
+					perror("send call");
+					exit(-1);
+				}
+			}
+		}	
+		free(sockets); 
+	}
+}
+
+void get_dest_handles(uint8_t dataBuffer[], Dict * handle_table, int clientSocket, int messageLen){
+	
+	int num_dest_handles_idx = 1 + 1 + dataBuffer[1];
+
+	uint8_t num_dest_handles = dataBuffer[num_dest_handles_idx];
+
+	int idx = num_dest_handles_idx + 1;
+	for (int i = 0; i < num_dest_handles; i++){
+		uint8_t dest_handle_len = dataBuffer[idx++];
+		char dest_handle[dest_handle_len+1];
+		memcpy(dest_handle, &dataBuffer[idx], dest_handle_len);
+		dest_handle[dest_handle_len] = '\0';
+
+		void* lookupResult = dctget(handle_table, dest_handle); 
+
+		if (lookupResult == NULL) { 
+			sendToClient(clientSocket, dest_handle, 7); 
+		} else {
+			int destSocket = (intptr_t)lookupResult;
+			int sent = sendPDU(destSocket, dataBuffer, messageLen);
+			if (sent < 0)
+			{
+				perror("send call");
+				exit(-1);
+			}
+		}
+		idx += dest_handle_len;
+	}
+}
+
+
+// similar to send handle ... maybe combine
 void sendToClient(int socketNum, char * buffer, int flag)
 {
 	uint8_t sendBuf[MAXBUF];   //data buffer
@@ -188,11 +240,6 @@ void sendToClient(int socketNum, char * buffer, int flag)
 	sendBuf[0] = flag;
 	memcpy(sendBuf + 1, buffer, sendLen);
 	sendBuf[sendLen + 1] = '\0';
-	
-	// printf("sendBuf contents (raw bytes): ");
-    // for (int i = 0; i < sendLen + 2; i++) {
-    //     printf("%02X ", sendBuf[i]);  // Print in hex format
-    // }
 
 	sent = sendPDU(socketNum, sendBuf, sendLen + 2);
 	if (sent < 0)
@@ -200,8 +247,6 @@ void sendToClient(int socketNum, char * buffer, int flag)
 		perror("send call");
 		exit(-1);
 	}
-
-	printf("Amount of data sent is: %d\n", sent);
 }
 
 int checkArgs(int argc, char *argv[])
