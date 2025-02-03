@@ -113,26 +113,57 @@ void recvFromClient(int clientSocket, Dict * handle_table)
 				break;
 			//case 4: // broadcast %B
 			case 5: // message %M
-				char handle[101], message[200];
+			//          msg start |>
+			// |-PDU LEN-||-flag-||-src handle len-||-src handle-||-# dest handles-||-dest handle len-||-dest handle-||-text-|
+			//   2 bytes     1            1               XX               1                1                  XX        XX
+				
+				uint8_t src_handle_len = msg[0];
+				char src_handle[src_handle_len+1];
+				memcpy(src_handle, msg+1, src_handle_len);
+				src_handle[src_handle_len] = '\0';
 
-				sscanf(msg, "%s %[^\n]", handle, message);
+				uint8_t dest_handle_len = msg[src_handle_len+2];
+				char dest_handle[dest_handle_len+1];
+				memcpy(dest_handle, msg + 1 + src_handle_len + 2, dest_handle_len);
+				dest_handle[dest_handle_len] = '\0';
 
-				printf("Handle: %s\n", handle);
+				char *message = msg + 1 + src_handle_len + 1 + 1 + dest_handle_len;
+				char formatted_message[src_handle_len + 2 + strlen(message) + 1];
+				snprintf(formatted_message, sizeof(formatted_message), "%s: %s", src_handle, message);
+
+				printf("Dest Handle: %s\n", dest_handle);
 				printf("Message: %s\n", message);
 
-				void* lookupResult = dctget(handle_table, handle); 
+				void* lookupResult = dctget(handle_table, dest_handle); 
 
 				if (lookupResult == NULL) { 
-					printf("hey. uh oh.\n");
-					sendToClient(clientSocket, handle, 7); 
+					sendToClient(clientSocket, dest_handle, 7); 
 				} else {
 					int destSocket = (intptr_t)lookupResult; // Safe cast
-					printf("Sending to socket number: %d, with message: %s\n", destSocket, message);
-					sendToClient(destSocket, message, 8);
+					printf("Sending to socket number: %d, with message: %s\n", destSocket, formatted_message);
+					sendToClient(destSocket, formatted_message, 8);
 				}
 				break;
 
-			//case 6: // multicast %C
+			// case 6: // multicast %C
+			// 	char *token;
+			// 	int num_handles;
+			// 	char handles[9][101];
+			// 	char text[200] = "";
+
+			// 	token = strtok(msg, " ");
+			// 	if (token == NULL) {
+			// 		printf(stderr, "Invalid input format\n");
+			// 		return 1;
+			// 	}
+
+			// 	// Extract num_handles
+			// 	num_handles = atoi(token);
+			// 	if (num_handles < 2 || num_handles > 9) {
+			// 		fprintf(stderr, "Invalid number of handles\n");
+			// 		return 1;
+			// 	}
+
 			//case 10: // list %L
 
 		}
@@ -158,10 +189,10 @@ void sendToClient(int socketNum, char * buffer, int flag)
 	memcpy(sendBuf + 1, buffer, sendLen);
 	sendBuf[sendLen + 1] = '\0';
 	
-	printf("sendBuf contents (raw bytes): ");
-    for (int i = 0; i < sendLen + 2; i++) {
-        printf("%02X ", sendBuf[i]);  // Print in hex format
-    }
+	// printf("sendBuf contents (raw bytes): ");
+    // for (int i = 0; i < sendLen + 2; i++) {
+    //     printf("%02X ", sendBuf[i]);  // Print in hex format
+    // }
 
 	sent = sendPDU(socketNum, sendBuf, sendLen + 2);
 	if (sent < 0)
