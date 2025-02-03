@@ -26,7 +26,7 @@
 #include "send.h"
 #include "pollLib.h"
 
-#define MAXBUF 1024
+#define MAXBUF 1401
 #define DEBUG_FLAG 1
 
 void sendToServer(int, char *);
@@ -105,7 +105,7 @@ void processMsgFromServer(int serverSocket){
 	{
 		uint8_t flag = dataBuffer[0];
 		char *msg = (char *)&dataBuffer[1];
-
+		//printf("Flag is: %d\n", flag);
 		switch(flag){
 			case 2:
 				addToPollSet(STDIN_FILENO);
@@ -126,14 +126,30 @@ void processMsgFromServer(int serverSocket){
 			case 7:
 				printf("\nClient with handle %s does not exist\n", msg);
 				break;
-			case 11:
+			case 11: {
+				printf("hi");
 				uint32_t num_handles = 0;
 				memcpy(&num_handles, msg, 4);
 				uint32_t num_handles_HOST = ntohl(num_handles);
-				printf("\nNumber of clients: %d", num_handles_HOST);
+				printf("\nNumber of clients: %d\n", num_handles_HOST);
+				removeFromPollSet(STDIN_FILENO);					// block stdin?
+				pollCall(-1);
+				processMsgFromServer(serverSocket);
+				break;
+			}
+			case 12: {
+				uint8_t handle_len = dataBuffer[1];
+				uint8_t handle_name[handle_len];
+				memcpy(handle_name, &dataBuffer[2], handle_len);
+				printf("\t%s\n", handle_name);
+				pollCall(-1);
+				processMsgFromServer(serverSocket);
+				break;
+			}
+			case 13:
+				addToPollSet(STDIN_FILENO);
 				break;
 			default:
-				//printf("\n%s\n", msg);
 				break;
 		}
 		
@@ -225,8 +241,11 @@ void sendToServer(int socketNum, char * myHandle)
 		if (msg == NULL) return;
 
     } else if (strcmp(command, "%L") == 0 || strcmp(command, "%l") == 0) {
-        flag = 10;
+        
+		flag = 10;
 		sendBuf[0] = flag;
+		sent = sendPDU(socketNum, sendBuf, 1);
+
 		return;
     } else {
         printf("Invalid command.\n");
@@ -306,6 +325,16 @@ int readFromStdin(uint8_t * buffer)
 			inputLen++;
 		}
 	}
+
+	 if (inputLen >= MAXBUF - 1 && aChar != '\n') {
+        printf("Error: Input exceeds the maximum of 1400 characters. Command ignored.\n");
+
+        // Ignore the rest of the input until the next newline
+        while (getchar() != '\n');
+
+        // Return an error code (e.g., -1) to indicate the input was too long
+        return -1;
+    }
 	
 	// Null terminate the string
 	buffer[inputLen] = '\0';

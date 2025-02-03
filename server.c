@@ -122,17 +122,17 @@ void recvFromClient(int clientSocket, Dict * handle_table)
 				break;
 			case 10: // list %L
 
-				uint8_t sendBuf[5];
+				uint8_t firstBuf[5];
 				uint32_t num_handles = htonl(handle_table->size);
-				sendBuf[0] = 11;
-				memcpy(&sendBuf[1], &num_handles, 4);
-				int sent = sendPDU(clientSocket, dataBuffer, 5);
+				firstBuf[0] = 11;
+				memcpy(&firstBuf[1], &num_handles, 4);
+
+				int sent = sendPDU(clientSocket, firstBuf, 5);
 				if (sent < 0)
 				{
 					perror("send call");
 					exit(-1);
 				}
-				break;
 
 				char ** handles = dctkeys(handle_table);
 				for (int i = 0; i < handle_table->size; i++) {
@@ -141,7 +141,7 @@ void recvFromClient(int clientSocket, Dict * handle_table)
 					handlePackets[0] = 12;
 					handlePackets[1] = handle_len;
 					memcpy(&handlePackets[2], handles[i], handle_len);
-					int sent = sendPDU(clientSocket, handlePackets, 5);
+					int sent = sendPDU(clientSocket, handlePackets, handle_len+2);
 					if (sent < 0)
 					{
 						perror("send call");
@@ -159,7 +159,6 @@ void recvFromClient(int clientSocket, Dict * handle_table)
 					perror("send call");
 					exit(-1);
 				}
-
 				break;
 
 			default:
