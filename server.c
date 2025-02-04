@@ -96,7 +96,7 @@ void recvFromClient(int clientSocket, Dict * handle_table)
 		uint8_t flag = dataBuffer[0]; 
 		
 		switch(flag) {
-			case 1: // incoming handle from client
+			case 1: {// incoming handle from client
 				char *handle = (char *)&dataBuffer[1];
 				if ((dctget(handle_table, handle)) == NULL) {
 					//printf("inserting %s with socket %d\n", handle, clientSocket);
@@ -106,7 +106,8 @@ void recvFromClient(int clientSocket, Dict * handle_table)
 				else {
 					sendWithFlag(clientSocket, handle, 3);
 				}
-				break;
+				break; 
+				}
 			case 4: // broadcast %B
 				broadcastHandling(dataBuffer, handle_table, clientSocket, messageLen);
 				break;
