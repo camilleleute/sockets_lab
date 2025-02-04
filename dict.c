@@ -155,7 +155,7 @@ void *dctremove(Dict *dct, char *key) {
 	int *val = NULL;
 	Node *prev = NULL;
 	Node *curr = NULL;
-        idx = (dcthash(key))%dct->cap;
+    idx = (dcthash(key))%dct->cap;
 	curr = dct->arr[idx];
 
         while (curr != NULL) {
@@ -176,6 +176,38 @@ void *dctremove(Dict *dct, char *key) {
         curr = curr->next;
         }
         return NULL;
+}
+
+/*dctremoveVAL: Removes a value and the key that mapped to it*/
+char *dctremoveVAL(Dict *dct, void* val) {
+	if (dct == NULL || val == NULL) {
+		return NULL;
+	}
+	for (int i = 0; i < (dct->cap); i++) {
+		Node *curr = dct->arr[i];
+        Node *prev = NULL;
+	
+	while (curr != NULL) {
+            if (curr->val == val) {
+                char *key = curr->key; // Store key to return
+
+                if (prev == NULL) {
+                    dct->arr[i] = curr->next;
+                } else {
+                    prev->next = curr->next;
+                }
+
+                free(curr);
+                dct->size--;
+
+                return key;
+            }
+            prev = curr;
+            curr = curr->next;
+        }
+    }
+    return NULL; // Value not found
+
 }
 
 

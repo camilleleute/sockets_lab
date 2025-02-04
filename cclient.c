@@ -25,8 +25,10 @@
 #include "safeUtil.h"
 #include "send.h"
 #include "pollLib.h"
+#include "shared.h"
 
-#define MAXBUF 1401
+
+#define MAXBUF 1402
 #define DEBUG_FLAG 1
 
 void sendToServer(int, char *);
@@ -53,27 +55,10 @@ int main(int argc, char * argv[])
 	return 0;
 }
 
-void sendHandle(int socketNum, char * handle) {
-	uint8_t sendBuf[MAXBUF];   //data buffer
-	int sendLen = 0;           //amount of data to send
-	int sent = 0;              //actual amount of data sent/* get the data and send it   */
-	sendLen = strlen(handle);
-	sendBuf[0] = 1; // flag = 1
-	memcpy(sendBuf+ 1, handle, sendLen);
-	sendBuf[sendLen + 1] = '\0';
-	
-	sent = sendPDU(socketNum, sendBuf, sendLen + 2);
-	if (sent < 0)
-	{
-		perror("send call");
-		exit(-1);
-	}	
-}
-
 void clientControl(int clientSocket, char * myHandle) {
 	setupPollSet();
 	addToPollSet(clientSocket);
-	sendHandle(clientSocket, myHandle);
+	sendWithFlag(clientSocket, myHandle, 1);
 
 	while(1){
 		int curr_socket = pollCall(-1);
@@ -87,6 +72,24 @@ void clientControl(int clientSocket, char * myHandle) {
 		fflush(stdout);
 	}
 
+}
+
+void sendHandle(int socketNum, char * handle) {
+	uint8_t sendBuf[MAXBUF];   //data buffer
+	int sendLen = 0;           //amount of data to send
+	int sent = 0;              //actual amount of data sent/* get the data and send it   */
+	
+	sendLen = strlen(handle);
+	sendBuf[0] = 1; // flag = 1
+	memcpy(sendBuf+ 1, handle, sendLen);
+	sendBuf[sendLen + 1] = '\0';
+	
+	sent = sendPDU(socketNum, sendBuf, sendLen + 2);
+	if (sent < 0)
+	{
+		perror("send call");
+		exit(-1);
+	}	
 }
 
 
@@ -127,7 +130,6 @@ void processMsgFromServer(int serverSocket){
 				printf("\nClient with handle %s does not exist\n", msg);
 				break;
 			case 11: {
-				printf("hi");
 				uint32_t num_handles = 0;
 				memcpy(&num_handles, msg, 4);
 				uint32_t num_handles_HOST = ntohl(num_handles);
@@ -194,7 +196,7 @@ void sendToServer(int socketNum, char * myHandle)
 {
 	uint8_t sendBuf[MAXBUF];   
 	uint8_t inputMsg[MAXBUF];
-	char * msg = "";
+	char * msg = NULL;
 	int sendLen = 0;           //amount of data to send
 	int sent = 0;              //actual amount of data sent/* get the data and send it   
 	char command[3]; 		   //2 bytes + 1 for null terminator
@@ -203,18 +205,21 @@ void sendToServer(int socketNum, char * myHandle)
 	uint8_t num_dest_handles = 0;
 	int idx = 0; 				// index into sendBuf
 	int start = 0;				// where to start parsing for destination handles
+	
 
 	// |-PDU LEN-||-flag-||-src handle len-||-src handle-||-# dest handles-||-dest handle len-||-dest handle-||-text-|
 	//   2 bytes     1            1               XX               1                1                  XX        XX
 	memset(sendBuf, 0, sizeof(sendBuf));	
 	memset(inputMsg, 0, sizeof(inputMsg));	
 
-	readFromStdin(inputMsg); 
+	int inputLen = readFromStdin(inputMsg); 
+	if (inputLen == -1){
+		return;
+	}
+
 	command[0] = inputMsg[0];
 	command[1] = inputMsg[1];
 	command[2] = '\0'; // Null terminate
-	//printf("read: %s string len: %d (including null)\n", inputMsg, sendLen);
-	//printf("Command is %s\n", command);
 
 	if (strcmp(command, "%M") == 0 || strcmp(command, "%m") == 0) {
         flag = 5;
@@ -238,14 +243,11 @@ void sendToServer(int socketNum, char * myHandle)
         	printf("Invalid input: number of recipients is out of range\n");
         	return;
     	}
-		if (msg == NULL) return;
-
+		
     } else if (strcmp(command, "%L") == 0 || strcmp(command, "%l") == 0) {
-        
 		flag = 10;
 		sendBuf[0] = flag;
 		sent = sendPDU(socketNum, sendBuf, 1);
-
 		return;
     } else {
         printf("Invalid command.\n");
@@ -261,21 +263,39 @@ void sendToServer(int socketNum, char * myHandle)
 	if (flag == 6 || flag == 5) {
 		sendBuf[idx++] = num_dest_handles;
 		msg = handle_parser(num_dest_handles, &inputMsg[start], sendBuf, &idx);
+		if (msg == NULL){
+			return;
+		}
+
 	} else {
 		msg = (char *)&inputMsg[3];
 	}
 
+	// Handle empty messages
+    if (msg == NULL) {
+        msg = "";
+    }
+
 	int msgLen = strlen(msg);
-	memcpy(&sendBuf[idx], msg, msgLen); // Copy only the message content (no null terminator)
-	idx += msgLen; // Update the index to point to the end of the message
-	sendBuf[idx++] = 0; // null terminate
-	sendLen = idx; // Update the total length of the PDU
-	
-	// printf("sendBuf contents (hex): ");
-	// for (int i = 0; i < sendLen; i++) {
-	// 	printf("%02X ", sendBuf[i]);
-	// }
-	// printf("\n");
+	while (msgLen > 200) {
+		uint8_t sendBufDUPE[MAXBUF];
+		memcpy(sendBufDUPE, sendBuf, idx);
+		memcpy(&sendBufDUPE[idx], msg, 199);
+		sendBufDUPE[idx+199] = '\0';
+		sent = sendPDU(socketNum, sendBufDUPE, idx+200);
+		if (sent < 0)
+		{
+			perror("send call");
+			exit(-1);
+		}
+		msg += 199;
+		msgLen -= 199;
+	}
+
+	memcpy(&sendBuf[idx], msg, msgLen); 
+	idx += msgLen; 
+	sendBuf[idx++] = 0; 
+	sendLen = idx;
 
 	sent = sendPDU(socketNum, sendBuf, sendLen);
 	if (sent < 0)
@@ -288,12 +308,12 @@ void sendToServer(int socketNum, char * myHandle)
 char* handle_parser(int num_handles, uint8_t msg[], uint8_t sendBuf[], int * idx) {
     char msg_copy[MAXBUF];
     strncpy(msg_copy, (char *)msg, MAXBUF - 1);
-    msg_copy[MAXBUF - 1] = '\0';  // Ensure null termination
+    msg_copy[MAXBUF - 1] = '\0';  
     char *token = strtok(msg_copy, " ");
     // Extract handles
     for (int i = 0; i < num_handles; i++) {
         if (token == NULL) {
-            printf("\nNot enough handles provided\n");
+            printf("Not enough handles provided\n");
             return NULL;
         }
         uint8_t handle_len = strlen(token);
@@ -303,8 +323,11 @@ char* handle_parser(int num_handles, uint8_t msg[], uint8_t sendBuf[], int * idx
         token = strtok(NULL, " ");
     }
 
-    int offset = token - msg_copy;
-    return (char *)(msg + offset);
+    // After extracting handles, check if there's a message
+    if (token == NULL) {
+        return ""; 
+    }
+    return (char *)(msg + (token - msg_copy));
 }
 
 
@@ -326,13 +349,10 @@ int readFromStdin(uint8_t * buffer)
 		}
 	}
 
-	 if (inputLen >= MAXBUF - 1 && aChar != '\n') {
+	if (inputLen >= MAXBUF - 1 && aChar != '\n') {
         printf("Error: Input exceeds the maximum of 1400 characters. Command ignored.\n");
 
-        // Ignore the rest of the input until the next newline
         while (getchar() != '\n');
-
-        // Return an error code (e.g., -1) to indicate the input was too long
         return -1;
     }
 	

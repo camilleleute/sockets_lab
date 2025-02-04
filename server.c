@@ -26,6 +26,8 @@
 #include "send.h"
 #include "pollLib.h"
 #include "dict.h"
+#include "shared.h"
+
 
 #define MAXBUF 1024
 #define DEBUG_FLAG 1
@@ -33,11 +35,11 @@
 void recvFromClient(int clientSocket, Dict *);
 int checkArgs(int argc, char *argv[]);
 void addNewSocket(int);
-void processClient(int, Dict *);
 void serverControl(int);
-void sendToClient(int , char * , int );
 void get_dest_handles(uint8_t [], Dict *, int, int);
 void broadcastHandling(uint8_t [], Dict * , int , int );
+void list_handles(Dict * , int );
+
 
 int main(int argc, char *argv[])
 {
@@ -45,7 +47,6 @@ int main(int argc, char *argv[])
 	int portNumber = 0;
 	
 	portNumber = checkArgs(argc, argv);
-	
 	//create the server socket
 	mainServerSocket = tcpServerSetup(portNumber);
 	// server control
@@ -68,19 +69,14 @@ void serverControl(int mainServerSocket) {
 			perror("Failed to poll");
 			return;
 		} else {
-			processClient(socketNum, handle_table);
+			recvFromClient(socketNum, handle_table);
 		}
 	}
 }
 
 void addNewSocket(int socketNum){
-	int newSocket = tcpAccept(socketNum, DEBUG_FLAG);
+	int newSocket = tcpAccept(socketNum, 0);
 	addToPollSet(newSocket);
-	return;
-}
-
-void processClient(int socketNum, Dict * handle_table){
-	recvFromClient(socketNum, handle_table);
 	return;
 }
 
@@ -103,12 +99,12 @@ void recvFromClient(int clientSocket, Dict * handle_table)
 			case 1: // incoming handle from client
 				char *handle = (char *)&dataBuffer[1];
 				if ((dctget(handle_table, handle)) == NULL) {
-					printf("inserting %s with socket %d\n", handle, clientSocket);
+					//printf("inserting %s with socket %d\n", handle, clientSocket);
 					dctinsert(handle_table, handle, (void *)(long)clientSocket);
-					sendToClient(clientSocket, handle, 2);
+					sendWithFlag(clientSocket, handle, 2);
 				}
 				else {
-					sendToClient(clientSocket, handle, 3);
+					sendWithFlag(clientSocket, handle, 3);
 				}
 				break;
 			case 4: // broadcast %B
@@ -121,44 +117,7 @@ void recvFromClient(int clientSocket, Dict * handle_table)
 				get_dest_handles(dataBuffer, handle_table, clientSocket, messageLen);
 				break;
 			case 10: // list %L
-
-				uint8_t firstBuf[5];
-				uint32_t num_handles = htonl(handle_table->size);
-				firstBuf[0] = 11;
-				memcpy(&firstBuf[1], &num_handles, 4);
-
-				int sent = sendPDU(clientSocket, firstBuf, 5);
-				if (sent < 0)
-				{
-					perror("send call");
-					exit(-1);
-				}
-
-				char ** handles = dctkeys(handle_table);
-				for (int i = 0; i < handle_table->size; i++) {
-					uint8_t handlePackets[MAXBUF];
-					uint8_t handle_len = strlen(handles[i]);
-					handlePackets[0] = 12;
-					handlePackets[1] = handle_len;
-					memcpy(&handlePackets[2], handles[i], handle_len);
-					int sent = sendPDU(clientSocket, handlePackets, handle_len+2);
-					if (sent < 0)
-					{
-						perror("send call");
-						exit(-1);
-					}
-					memset(handlePackets, 0, sizeof(handlePackets));	
-
-				}
-
-				uint8_t doneBuf[1];
-				doneBuf[0] = 13;
-				int donesent = sendPDU(clientSocket, doneBuf, 1);
-				if (donesent < 0)
-				{
-					perror("send call");
-					exit(-1);
-				}
+				list_handles(handle_table, clientSocket);
 				break;
 
 			default:
@@ -166,12 +125,52 @@ void recvFromClient(int clientSocket, Dict * handle_table)
 		}
 	} else {
 		close(clientSocket);
-		printf("Connection closed by other side\n");
-		// remove from handle table
+		dctremoveVAL(handle_table, (void *)(intptr_t)clientSocket);
+		//printf("Connection closed by other side\n");
 		removeFromPollSet(clientSocket);
 	}
 }
 
+void list_handles(Dict * handle_table, int clientSocket) {
+	uint8_t firstBuf[5];
+	uint32_t num_handles = htonl(handle_table->size);
+	firstBuf[0] = 11;
+	memcpy(&firstBuf[1], &num_handles, 4);
+
+	int sent = sendPDU(clientSocket, firstBuf, 5);
+	if (sent < 0)
+	{
+		perror("send call");
+		exit(-1);
+	}
+
+	char ** handles = dctkeys(handle_table);
+	for (int i = 0; i < handle_table->size; i++) {
+		uint8_t handlePackets[MAXBUF];
+		uint8_t handle_len = strlen(handles[i]);
+		handlePackets[0] = 12;
+		handlePackets[1] = handle_len;
+		memcpy(&handlePackets[2], handles[i], handle_len);
+		int sent = sendPDU(clientSocket, handlePackets, handle_len+2);
+		if (sent < 0)
+		{
+			perror("send call");
+			exit(-1);
+		}
+		memset(handlePackets, 0, sizeof(handlePackets));	
+	}
+
+	uint8_t doneBuf[1];
+	doneBuf[0] = 13;
+	int donesent = sendPDU(clientSocket, doneBuf, 1);
+	if (donesent < 0)
+	{
+		perror("send call");
+		exit(-1);
+	}
+}
+
+// sends message to all clients on server
 void broadcastHandling(uint8_t dataBuffer[], Dict * handle_table, int clientSocket, int messageLen) {
 	char ** sockets = dctkeys(handle_table);
 	if (sockets == NULL) {
@@ -197,6 +196,7 @@ void broadcastHandling(uint8_t dataBuffer[], Dict * handle_table, int clientSock
 	}
 }
 
+// parses through destination handles and passes on message to said handles
 void get_dest_handles(uint8_t dataBuffer[], Dict * handle_table, int clientSocket, int messageLen){
 	
 	int num_dest_handles_idx = 1 + 1 + dataBuffer[1];
@@ -213,7 +213,7 @@ void get_dest_handles(uint8_t dataBuffer[], Dict * handle_table, int clientSocke
 		void* lookupResult = dctget(handle_table, dest_handle); 
 
 		if (lookupResult == NULL) { 
-			sendToClient(clientSocket, dest_handle, 7); 
+			sendWithFlag(clientSocket, dest_handle, 7); 
 		} else {
 			int destSocket = (intptr_t)lookupResult;
 			int sent = sendPDU(destSocket, dataBuffer, messageLen);
@@ -224,27 +224,6 @@ void get_dest_handles(uint8_t dataBuffer[], Dict * handle_table, int clientSocke
 			}
 		}
 		idx += dest_handle_len;
-	}
-}
-
-
-// similar to send handle ... maybe combine
-void sendToClient(int socketNum, char * buffer, int flag)
-{
-	uint8_t sendBuf[MAXBUF];   //data buffer
-	int sendLen = 0;           //amount of data to send
-	int sent = 0;              //actual amount of data sent/* get the data and send it   */
-	
-	sendLen = strlen(buffer);
-	sendBuf[0] = flag;
-	memcpy(sendBuf + 1, buffer, sendLen);
-	sendBuf[sendLen + 1] = '\0';
-
-	sent = sendPDU(socketNum, sendBuf, sendLen + 2);
-	if (sent < 0)
-	{
-		perror("send call");
-		exit(-1);
 	}
 }
 
