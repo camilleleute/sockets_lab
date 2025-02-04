@@ -5,7 +5,7 @@ CC= gcc
 CFLAGS= -g -Wall -std=gnu99
 LIBS = 
 
-OBJS = networks.o gethostbyname.o pollLib.o safeUtil.o send.o dict.o
+OBJS = networks.o gethostbyname.o pollLib.o safeUtil.o send.o dict.o shared.o
 
 all:   cclient server
 
@@ -22,7 +22,7 @@ cleano:
 	rm -f *.o
 
 clean:
-	rm -f server cclient send dict *.o
+	rm -f server cclient send dict shared *.o
 
 
 
